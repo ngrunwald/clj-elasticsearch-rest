@@ -6,4 +6,6 @@
   :dependencies [[org.clojure/clojure "1.5.1"]
                  [cheshire "5.2.0"]
                  [clj-elasticsearch "0.5.0-SNAPSHOT"]
-                 [http-kit "2.1.11"]])
+                 [http-kit "2.1.11"]]
+  :profiles {:dev {:dependencies [[clj-elasticsearch-native "0.5.0-SNAPSHOT"]
+                                  [org.elasticsearch/elasticsearch "0.20.5"]]}})

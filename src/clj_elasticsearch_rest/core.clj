@@ -8,6 +8,8 @@
             [clojure.stacktrace :as cst]
             [clojure.pprint :as pp]))
 
+(def ^{:dynamic true} *client*)
+
 (def global-rest-specs
   (let [rs (io/resource "blueprint.edn")
         edn-str (slurp rs)]
@@ -33,6 +35,8 @@
       (on-failure resp)
       (on-response (prepare-response resp)))))
 
+(defn make-listener [arg] (specs/make-listener :rest arg))
+
 (defn- build-url
   [rest-uri args rest-default]
   (let [interpolated (map #(if (string? %)
@@ -53,32 +57,36 @@
   (when (and rest-uri rest-method)
     (let [required-args (concat constructor required)
           uri-args (conj (filter keyword? rest-uri) :source :async? :listener)]
-      (fn [client {:keys [source async? listener] :as args}]
-        (let [expanded-url (build-url rest-uri args rest-default)
-              full-uri (str (:base-url client) "/" expanded-url)
-              args-left (apply dissoc args uri-args)
-              merged-headers (merge (:headers client) (:headers args))
-              http-opts (merge client {:url full-uri
-                                       :headers merged-headers
-                                       :query-params (zipmap (map kw->param (keys args-left))
-                                                             (map str (vals args-left)))
-                                       :method rest-method})
-              http-with-body (if source
-                               (assoc http-opts :body (if (string? source)
-                                                        source
-                                                        (json/encode source)))
-                               http-opts)
-              callback (fn [{:keys [opts status body headers error] :as resp}]
+      (fn self
+        ([client {:keys [source async? listener] :as args}]
+           (let [expanded-url (build-url rest-uri args rest-default)
+                 full-uri (str (:base-url client) "/" expanded-url)
+                 args-left (apply dissoc args uri-args)
+                 merged-headers (merge (:headers client) (:headers args))
+                 http-opts (merge client {:url full-uri
+                                          :headers merged-headers
+                                          :query-params (zipmap (map kw->param (keys args-left))
+                                                                (map str (vals args-left)))
+                                          :method rest-method})
+                 http-with-body (if source
+                                  (assoc http-opts :body (if (string? source)
+                                                           source
+                                                           (json/encode source)))
+                                  http-opts)
+                 callback (fn [{:keys [opts status body headers error] :as resp}]
+                            (if error
+                              resp
+                              (prepare-response resp)))]
+             (cond
+              async? (http/request http-with-body callback)
+              listener (http/request http-with-body listener)
+              :default (let [{:keys [error opts] :as resp}
+                             (deref (http/request http-with-body callback))]
                          (if error
-                           resp
-                           (prepare-response resp)))]
-          (cond
-           async? (http/request http-with-body callback)
-           listener (http/request http-with-body listener)
-           :default (let [{:keys [error opts] :as resp} (deref (http/request http-with-body callback))]
-                      (if error
-                        (throw (ex-info "error in request" {:error error :opts opts}))
-                        resp))))))))
+                           (throw (ex-info (format "error in request with status %s" error)
+                                           {:error error :opts opts}))
+                           resp)))))
+        ([args] (self *client* args))))))
 
 (defn- make-implementation!
   [specs]
@@ -104,3 +112,9 @@
                  :user-agent "clj-elasticsearch"
                  :headers {"Content-Type" "application/json"}}]
     (merge options spec)))
+
+(defmacro with-rest-client
+  "opens a rest client with given spec"
+  [server-spec & body]
+  `(binding [*client* (specs/make-client :rest ~server-spec)]
+     (do ~@body)))
