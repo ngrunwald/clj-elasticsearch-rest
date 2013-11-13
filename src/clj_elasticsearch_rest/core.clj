@@ -37,7 +37,7 @@
   [rest-uri args rest-default]
   (let [interpolated (map #(if (string? %)
                              %
-                             (get args % (get rest-default %))) args)]
+                             (get args % (get rest-default %))) rest-uri)]
     (->> interpolated
          (remove nil?)
          (str/join "/"))))
@@ -91,7 +91,7 @@
               acc))
           {} specs))
 
-(defonce implementation (make-implementation! specs/global-specs))
+(def implementation (make-implementation! specs/global-specs))
 
 (extend-protocol specs/PCallAPI
   clojure.lang.IPersistentMap
