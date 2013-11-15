@@ -15,10 +15,17 @@
         edn-str (slurp rs)]
     (edn/read-string edn-str)))
 
+(defn parse-json-key
+  [^String k]
+  (-> k
+      (str/replace #"^_" "")
+      (.replace \_ \-)
+      (keyword)))
+
 (defn- prepare-response
   [{:keys [opts body headers] :as resp}]
-  (if (re-find #"json" (get headers "Content-Type"))
-    (let [decoded (json/decode body)]
+  (if (re-find #"json" (get headers :content-type ""))
+    (let [decoded (json/decode body parse-json-key)]
       (merge opts (assoc decoded :headers headers)))
     resp))
 
@@ -44,6 +51,7 @@
                              (get args % (get rest-default %))) rest-uri)]
     (->> interpolated
          (remove nil?)
+         (map (fn [e] (if (coll? e) (str/join "," e) e)))
          (str/join "/"))))
 
 (defn kw->param
@@ -62,12 +70,15 @@
            (let [expanded-url (build-url rest-uri args rest-default)
                  full-uri (str (:base-url client) "/" expanded-url)
                  args-left (apply dissoc args uri-args)
+                 http-method (if (= rest-method :put/post)
+                               (if (:id args) :put :post)
+                               rest-method)
                  merged-headers (merge (:headers client) (:headers args))
                  http-opts (merge client {:url full-uri
                                           :headers merged-headers
                                           :query-params (zipmap (map kw->param (keys args-left))
                                                                 (map str (vals args-left)))
-                                          :method rest-method})
+                                          :method http-method})
                  http-with-body (if source
                                   (assoc http-opts :body (if (string? source)
                                                            source

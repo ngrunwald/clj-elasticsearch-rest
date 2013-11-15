@@ -26,6 +26,7 @@
 (use-fixtures :each es-fixture)
 
 (deftest es-client
+  (is (false? (:exists? (exists-index {:indices ["test"]}))))
   (is (:id (index-doc {:index "test" :type "tyu"
                        :source {:field1 ["toto" "tutu"] :field2 42
                                 :field3 {:tyu {:foo "bar"}}}
