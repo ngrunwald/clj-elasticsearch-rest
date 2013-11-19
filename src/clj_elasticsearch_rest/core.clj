@@ -26,7 +26,7 @@
   [{:keys [opts body headers] :as resp}]
   (if (re-find #"json" (get headers :content-type ""))
     (let [decoded (json/decode body parse-json-key)]
-      (merge opts (assoc decoded :headers headers)))
+      (assoc decoded :headers headers))
     resp))
 
 (defmethod specs/make-listener :rest
@@ -58,46 +58,73 @@
   [kw]
   (-> kw (name) (str/lower-case) (str/replace #"\?$" "") (.replace \- \_)))
 
+(defn request-error?
+  [{:keys [status] :as resp}]
+  (println "STATUS" status)
+  (not (and (>= status 200) (< status 300))))
+
+
+(defn map-query-val
+  [v]
+  (if (coll? v)
+    (str/join "," (map name v))
+    (if (keyword? v)
+      (kw->param v)
+      (str v))))
+
 (defn- make-requester
   [{:keys [symb constructor required
-           rest-uri rest-method rest-default]
+           rest-uri rest-method rest-default
+           on-success on-failure aliases]
     :as spec}]
-  (when (and rest-uri rest-method)
-    (let [required-args (concat constructor required)
-          uri-args (conj (filter keyword? rest-uri) :source :async? :listener)]
-      (fn self
-        ([client {:keys [source async? listener] :as args}]
-           (let [expanded-url (build-url rest-uri args rest-default)
-                 full-uri (str (:base-url client) "/" expanded-url)
-                 args-left (apply dissoc args uri-args)
-                 http-method (if (= rest-method :put/post)
-                               (if (:id args) :put :post)
-                               rest-method)
-                 merged-headers (merge (:headers client) (:headers args))
-                 http-opts (merge client {:url full-uri
-                                          :headers merged-headers
-                                          :query-params (zipmap (map kw->param (keys args-left))
-                                                                (map str (vals args-left)))
-                                          :method http-method})
-                 http-with-body (if source
-                                  (assoc http-opts :body (if (string? source)
-                                                           source
-                                                           (json/encode source)))
-                                  http-opts)
-                 callback (fn [{:keys [opts status body headers error] :as resp}]
-                            (if error
-                              resp
-                              (prepare-response resp)))]
-             (cond
-              async? (http/request http-with-body callback)
-              listener (http/request http-with-body listener)
-              :default (let [{:keys [error opts] :as resp}
-                             (deref (http/request http-with-body callback))]
-                         (if error
-                           (throw (ex-info (format "error in request with status %s" error)
-                                           {:error error :opts opts}))
-                           resp)))))
-        ([args] (self *client* args))))))
+  (let [swap-aliases (if aliases (fn [p] (get aliases p p)) identity)]
+    (when (and rest-uri rest-method)
+     (let [required-args (concat constructor required)
+           uri-args (conj (filter keyword? rest-uri) :source :extra-source :async? :listener)]
+       (fn self
+         ([client {:keys [source extra-source async? listener] :as args}]
+            (let [real-args (if aliases
+                              (zipmap (map swap-aliases (keys args)) (vals args))
+                              args)
+                  expanded-url (build-url rest-uri real-args rest-default)
+                  real-source (cond
+                               (string? extra-source) extra-source
+                               (and extra-source (string? source)) (json/encode extra-source)
+                               (string? source) source
+                               :else (json/encode (merge source extra-source)))
+                  full-uri (str (:base-url client) "/" expanded-url)
+                  args-left (apply dissoc real-args uri-args)
+                  http-method (if (= rest-method :put/post)
+                                (if (:id real-args) :put :post)
+                                rest-method)
+                  merged-headers (merge (:headers client) (:headers real-args))
+                  http-opts (merge client {:url full-uri
+                                           :headers merged-headers
+                                           :query-params (zipmap (map kw->param (keys args-left))
+                                                                 (map map-query-val (vals args-left)))
+                                           :method http-method})
+                  http-with-body (if source
+                                   (assoc http-opts :body real-source)
+                                   http-opts)
+                  callback (fn [{:keys [opts status body headers error] :as resp}]
+                             (if (request-error? resp)
+                               (if on-failure
+                                 (on-failure resp)
+                                 resp)
+                               (if on-success
+                                 #spy/d (assoc (on-success resp) :http-response (dissoc resp :body))
+                                 #spy/d (assoc (prepare-response resp)
+                                          :http-response (dissoc resp :body)))))]
+              (cond
+               async? (http/request http-with-body callback)
+               listener (http/request http-with-body listener)
+               :default (let [{:keys [error opts] :as resp}
+                              (deref (http/request http-with-body callback))]
+                          (if error
+                            (throw (ex-info (format "error in request with status %s" error)
+                                            {:error error :opts opts}))
+                            resp)))))
+         ([args] (self *client* args)))))))
 
 (defn- make-implementation!
   [specs]
