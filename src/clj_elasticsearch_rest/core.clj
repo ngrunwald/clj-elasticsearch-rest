@@ -60,9 +60,7 @@
 
 (defn request-error?
   [{:keys [status] :as resp}]
-  (println "STATUS" status)
   (not (and (>= status 200) (< status 300))))
-
 
 (defn map-query-val
   [v]

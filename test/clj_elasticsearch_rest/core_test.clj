@@ -34,7 +34,6 @@
                        :source {:field1 ["toto" "tutu"] :field2 42
                                 :field3 {:tyu {:foo "bar"}}}
                        :id "mid"})))
-  ;; TODO harmonize
   (is (> (get-in (refresh-index {:indices ["test"]}) [:shards :successful]) 0))
   (is (true? (:exists? (exists-index {:indices ["test"]}))))
   ;; TODO harmonize (not KW)
