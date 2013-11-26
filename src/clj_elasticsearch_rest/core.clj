@@ -6,7 +6,8 @@
             [clojure.string :as str]
             [cheshire.core :as json]
             [clojure.stacktrace :as cst]
-            [clojure.pprint :as pp]))
+            [clojure.pprint :as pp])
+  (:use [clojure.pprint :only [cl-format]]))
 
 (def ^{:dynamic true} *client*)
 
@@ -15,17 +16,10 @@
         edn-str (slurp rs)]
     (edn/read-string edn-str)))
 
-(defn parse-json-key
-  [^String k]
-  (-> k
-      (str/replace #"^_" "")
-      (.replace \_ \-)
-      (keyword)))
-
 (defn- prepare-response
   [{:keys [opts body headers] :as resp}]
   (if (re-find #"json" (get headers :content-type ""))
-    (let [decoded (json/decode body parse-json-key)]
+    (let [decoded (json/decode body specs/parse-json-key)]
       (assoc decoded :headers headers))
     resp))
 
@@ -63,7 +57,6 @@
   (println "STATUS" status)
   (not (and (>= status 200) (< status 300))))
 
-
 (defn map-query-val
   [v]
   (if (coll? v)
@@ -71,6 +64,37 @@
     (if (keyword? v)
       (kw->param v)
       (str v))))
+
+(defn- format-params-doc
+  [method]
+  (cl-format false "~2TParams keys:~%~:{~4T~vA=> ~A~%~}" method))
+
+(defn prepare-rest-doc
+  [{:keys [params] :as dynaspec}
+   required-args
+   default]
+  (let [all-required (select-keys params required-args)
+        with-default (map (fn [[k [t d]]]
+                            (let [default-val (if (k default)
+                                                (k default)
+                                                "all")]
+                              [k [t (str d " (default: " default-val ")")]]))
+                          (select-keys all-required (keys default)))
+        required (map (fn [[k [t d]]]
+                        [k [t (str d " (required)")]])
+                      (apply dissoc all-required (keys default)))
+        optional (apply dissoc params required-args)
+        max-length (apply max
+                          (mapcat (fn [coll]
+                                    (map (fn [[k _]] (count (name k))) coll))
+                                  [required with-default optional]))]
+    (reduce (fn [acc mets]
+              (reduce (fn [acc [k [typ doc]]]
+                        ;; TODO check cl-format syntax
+                        (str acc "\n";; (format-params-doc [max-length k doc])
+                             ))
+                      acc mets))
+            "" (map #(sort-by first %) [required with-default optional]))))
 
 (defn- make-requester
   [{:keys [symb constructor required
@@ -80,51 +104,56 @@
   (let [swap-aliases (if aliases (fn [p] (get aliases p p)) identity)]
     (when (and rest-uri rest-method)
      (let [required-args (concat constructor required)
+           kw-method-name (-> symb (name) (keyword))
+           dynaspec (get global-rest-specs kw-method-name)
+           params-doc (prepare-rest-doc dynaspec required-args rest-default)
            uri-args (conj (filter keyword? rest-uri) :source :extra-source :async? :listener)]
-       (fn self
-         ([client {:keys [source extra-source async? listener] :as args}]
-            (let [real-args (if aliases
-                              (zipmap (map swap-aliases (keys args)) (vals args))
-                              args)
-                  expanded-url (build-url rest-uri real-args rest-default)
-                  real-source (cond
-                               (string? extra-source) extra-source
-                               (and extra-source (string? source)) (json/encode extra-source)
-                               (string? source) source
-                               :else (json/encode (merge source extra-source)))
-                  full-uri (str (:base-url client) "/" expanded-url)
-                  args-left (apply dissoc real-args uri-args)
-                  http-method (if (= rest-method :put/post)
-                                (if (:id real-args) :put :post)
-                                rest-method)
-                  merged-headers (merge (:headers client) (:headers real-args))
-                  http-opts (merge client {:url full-uri
-                                           :headers merged-headers
-                                           :query-params (zipmap (map kw->param (keys args-left))
-                                                                 (map map-query-val (vals args-left)))
-                                           :method http-method})
-                  http-with-body (if source
-                                   (assoc http-opts :body real-source)
-                                   http-opts)
-                  callback (fn [{:keys [opts status body headers error] :as resp}]
-                             (if (request-error? resp)
-                               (if on-failure
-                                 (on-failure resp)
-                                 resp)
-                               (if on-success
-                                 #spy/d (assoc (on-success resp) :http-response (dissoc resp :body))
-                                 #spy/d (assoc (prepare-response resp)
-                                          :http-response (dissoc resp :body)))))]
-              (cond
-               async? (http/request http-with-body callback)
-               listener (http/request http-with-body listener)
-               :default (let [{:keys [error opts] :as resp}
-                              (deref (http/request http-with-body callback))]
-                          (if error
-                            (throw (ex-info (format "error in request with status %s" error)
-                                            {:error error :opts opts}))
-                            resp)))))
-         ([args] (self *client* args)))))))
+       (vary-meta
+        (fn make-request
+          ([client {:keys [source extra-source async? listener] :as args}]
+             (let [real-args (if aliases
+                               (zipmap (map swap-aliases (keys args)) (vals args))
+                               args)
+                   expanded-url (build-url rest-uri real-args rest-default)
+                   real-source (cond
+                                (string? extra-source) extra-source
+                                (and extra-source (string? source)) (json/encode extra-source)
+                                (string? source) source
+                                :else (json/encode (merge source extra-source)))
+                   full-uri (str (:base-url client) "/" expanded-url)
+                   args-left (apply dissoc real-args uri-args)
+                   http-method (if (= rest-method :put/post)
+                                 (if (:id real-args) :put :post)
+                                 rest-method)
+                   merged-headers (merge (:headers client) (:headers real-args))
+                   http-opts (merge client {:url full-uri
+                                            :headers merged-headers
+                                            :query-params (zipmap (map kw->param (keys args-left))
+                                                                  (map map-query-val (vals args-left)))
+                                            :method http-method})
+                   http-with-body (if source
+                                    (assoc http-opts :body real-source)
+                                    http-opts)
+                   callback (fn [{:keys [opts status body headers error] :as resp}]
+                              (if (request-error? resp)
+                                (if on-failure
+                                  (on-failure resp)
+                                  resp)
+                                (if on-success
+                                  #spy/d (assoc (on-success resp) :http-response (dissoc resp :body))
+                                  #spy/d (assoc (prepare-response resp)
+                                           :http-response (dissoc resp :body)))))]
+               (cond
+                async? (http/request http-with-body callback)
+                listener (http/request http-with-body listener)
+                :default (let [{:keys [error opts] :as resp}
+                               (deref (http/request http-with-body callback))]
+                           (if error
+                             (throw (ex-info (format "error in request with status %s" error)
+                                             {:error error :opts opts}))
+                             resp)))))
+          ([args] (make-request *client* args)))
+        assoc :doc params-doc)))))
 
 (defn- make-implementation!
   [specs]
