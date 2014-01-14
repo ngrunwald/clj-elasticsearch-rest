@@ -11,10 +11,28 @@
 
 (def ^{:dynamic true} *client*)
 
+(def preprocess-handlers
+  {:bulk-request-body
+   (fn [{:keys [actions]}]
+     (str
+      (str/join "\n"
+                (mapcat
+                 (fn [[action content]]
+                   [(json/encode action) (json/encode content)])
+                 actions))
+      "\n"))})
+
+(def other-routes
+  {:bulk-request
+   {:params {:types [:string-or-list-of-strings "String or seq of Strings"]
+             :indices [:string-or-list-of-strings "String or seq of Strings"]
+             :actions [:list "list of requests of the form {:action-type {:params ...}}"]}}})
+
 (def global-rest-specs
   (let [rs (io/resource "blueprint.edn")
         edn-str (slurp rs)]
-    (edn/read-string edn-str)))
+    (merge (edn/read-string edn-str)
+           other-routes)))
 
 (defn- prepare-response
   [{:keys [opts body headers] :as resp}]
@@ -98,15 +116,17 @@
 (defn- make-requester
   [{:keys [symb constructor required
            rest-uri rest-method rest-default
-           on-success on-failure aliases]
+           on-success on-failure aliases
+           rest-preprocess]
     :as spec}]
-  (let [swap-aliases (if aliases (fn [p] (get aliases p p)) identity)]
+  (let [swap-aliases (if aliases (fn [p] (get aliases p p)) identity)
+        preprocess-fn (when rest-preprocess (preprocess-handlers rest-preprocess))]
     (when (and rest-uri rest-method)
      (let [required-args (concat constructor required)
            kw-method-name (-> symb (name) (keyword))
            dynaspec (get global-rest-specs kw-method-name)
            params-doc (prepare-rest-doc dynaspec required-args rest-default)
-           uri-args (conj (filter keyword? rest-uri) :source :extra-source :async? :listener)]
+           uri-args (conj (filter keyword? rest-uri) :source :extra-source :async? :listener :actions :headers)]
        (vary-meta
         (fn make-request
           ([client {:keys [source extra-source async? listener] :as args}]
@@ -115,6 +135,7 @@
                                args)
                    expanded-url (build-url rest-uri real-args rest-default)
                    real-source (cond
+                                rest-preprocess (preprocess-fn args)
                                 (string? extra-source) extra-source
                                 (and extra-source (string? source)) (json/encode extra-source)
                                 (string? source) source
@@ -130,7 +151,7 @@
                                             :query-params (zipmap (map kw->param (keys args-left))
                                                                   (map map-query-val (vals args-left)))
                                             :method http-method})
-                   http-with-body (if source
+                   http-with-body (if (or source rest-preprocess)
                                     (assoc http-opts :body real-source)
                                     http-opts)
                    callback (fn [{:keys [opts status body headers error] :as resp}]
