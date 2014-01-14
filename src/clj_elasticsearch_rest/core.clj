@@ -139,9 +139,9 @@
                                   (on-failure resp)
                                   resp)
                                 (if on-success
-                                  #spy/d (assoc (on-success resp) :http-response (dissoc resp :body))
-                                  #spy/d (assoc (prepare-response resp)
-                                           :http-response (dissoc resp :body)))))]
+                                  (assoc (on-success resp) :http-response (dissoc resp :body))
+                                  (assoc (prepare-response resp)
+                                    :http-response (dissoc resp :body)))))]
                (cond
                 async? (http/request http-with-body callback)
                 listener (http/request http-with-body listener)
