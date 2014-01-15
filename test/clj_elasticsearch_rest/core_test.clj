@@ -2,7 +2,8 @@
   (:require [clojure.test :refer :all]
             [clj-elasticsearch-rest.core :refer :all]
             [clj-elasticsearch-native.core :as nat]
-            [clojure.java.io :refer :all]))
+            [clojure.java.io :refer :all]
+            [clojure.core.async :refer [<!!]]))
 
 (defn delete-dir
   [path]
@@ -48,6 +49,8 @@
   (let [ft (count-docs {:indices ["test"] :async? true})]
     (is (= 1 (:count @ft)))
     (is (realized? ft)))
+  (let [ft (count-docs {:indices ["test"] :chan? true})]
+    (is (= 1 (:count (<!! ft)))))
   ;; normalize :num_docs
   (let [status (index-status {:indices ["test"]})]
     (is (=  1 (get-in status [:indices :test :docs :num-docs]))))

@@ -6,7 +6,8 @@
             [clojure.string :as str]
             [cheshire.core :as json]
             [clojure.stacktrace :as cst]
-            [clojure.pprint :as pp])
+            [clojure.pprint :as pp]
+            [clojure.core.async :as async :refer [put! chan]])
   (:use [clojure.pprint :only [cl-format]]))
 
 (def ^{:dynamic true} *client*)
@@ -126,10 +127,10 @@
            kw-method-name (-> symb (name) (keyword))
            dynaspec (get global-rest-specs kw-method-name)
            params-doc (prepare-rest-doc dynaspec required-args rest-default)
-           uri-args (conj (filter keyword? rest-uri) :source :extra-source :async? :listener :actions :headers)]
+           uri-args (conj (filter keyword? rest-uri) :source :extra-source :async? :listener :actions :headers :chan?)]
        (vary-meta
         (fn make-request
-          ([client {:keys [source extra-source async? listener] :as args}]
+          ([client {:keys [source extra-source async? listener chan?] :as args}]
              (let [real-args (if aliases
                                (zipmap (map swap-aliases (keys args)) (vals args))
                                args)
@@ -166,6 +167,11 @@
                (cond
                 async? (http/request http-with-body callback)
                 listener (http/request http-with-body listener)
+                chan? (let [resp-chan (chan)
+                            chan-cb (fn [resp]
+                                      (put! resp-chan (callback resp)))]
+                        (http/request http-with-body chan-cb)
+                        resp-chan)
                 :default (let [{:keys [error opts] :as resp}
                                (deref (http/request http-with-body callback))]
                            (if error
