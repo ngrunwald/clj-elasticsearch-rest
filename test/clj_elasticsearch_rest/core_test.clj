@@ -72,7 +72,8 @@
   (let [res (bulk-request {:indices ["test"]
                            :actions [[{:index {:_type "tyu" :_id "foo1"}} {:ktest "foo1"}]
                                      [{:index {:_type "tyu" :_id "foo2"}} {:ktest "foo2"}]]})]
-    (is (every? true? (map #(-> % (vals) (first) (:ok)) (:items res)))))
+    (is (every? true? (map #(-> % (vals) (first) (:ok)) (:items res))))
+    (is (= 2 (count (:items res)))))
   ;; (is (re-find #":matches :version .* ?:type :index :id"
   ;;              (:doc (meta #'clj-elasticsearch-rest.core/index-doc))))
   )
