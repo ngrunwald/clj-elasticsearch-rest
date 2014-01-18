@@ -199,12 +199,17 @@
   (specs/make-api-call [this method-name options]
     (specs/make-api-call* implementation this method-name options)))
 
+(defn make-client
+  ([spec]
+     (let [options {:base-url "http://localhost:9200"
+                    :user-agent "clj-elasticsearch"
+                    :headers {"Content-Type" "application/json"}}]
+       (merge options spec)))
+  ([] (make-client {})))
+
 (defmethod specs/make-client :rest
   [_ spec]
-  (let [options {:base-url "http://localhost:9200"
-                 :user-agent "clj-elasticsearch"
-                 :headers {"Content-Type" "application/json"}}]
-    (merge options spec)))
+  (make-client spec))
 
 (defmacro with-rest-client
   "opens a rest client with given spec"
